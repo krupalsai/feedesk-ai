@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FeeDesk AI — fee desk</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 860px; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.4rem; margin-bottom: 0.2rem; }
+  h2 { font-size: 1.1rem; margin-top: 2rem; }
+  .note { color: #555; font-size: 0.9rem; }
+  .banner { padding: 0.7rem 1rem; border-radius: 6px; margin: 1rem 0; font-size: 0.95rem; }
+  .banner.mock { background: #fff4d6; border: 1px solid #e0b93c; }
+  .banner.live { background: #e3f2e5; border: 1px solid #6db584; }
+  label { display: block; margin: 0.6rem 0 0.2rem; font-weight: 600; }
+  input, select { padding: 0.5rem; box-sizing: border-box; }
+  input { width: 100%; }
+  button { margin: 0.3rem 0.3rem 0.3rem 0; padding: 0.5rem 1rem; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; margin-top: 0.5rem; font-size: 0.92rem; }
+  th, td { border: 1px solid #ddd; padding: 0.5rem; text-align: left; vertical-align: top; }
+  th { background: #f4f4f4; }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.8rem; font-weight: 700; }
+  .st-AWAITING_APPROVAL { background: #eee; }
+  .st-APPROVED { background: #dbeafe; }
+  .st-SETTLED { background: #dcfce7; }
+  .st-PENDING { background: #fef3c7; }
+  .st-DENIED { background: #fee2e2; }
+  .st-REFUNDED { background: #ede9fe; }
+  .explain { background: #f8fafc; border: 1px solid #ddd; border-radius: 6px; padding: 0.7rem 1rem; margin-top: 0.5rem; }
+  .explain h3 { margin: 0 0 0.3rem; font-size: 1rem; }
+  .explain p { margin: 0.2rem 0; }
+  .explain .src { color: #666; font-size: 0.8rem; }
+  pre { background: #f4f4f4; padding: 1rem; overflow: auto; white-space: pre-wrap; font-size: 0.85rem; }
+  .row { display: flex; gap: 1rem; }
+  .row > div { flex: 1; }
+  .empty { color: #777; font-style: italic; }
+</style>
+</head>
+<body>
+  <h1>FeeDesk AI — fee desk</h1>
+  <p class="note">A fee is shown as <strong>settled only when PayPal says so</strong> — a verified capture or webhook. Never a screenshot, never a payer's word.</p>
+  <div id="mode-banner" class="banner mock">Loading…</div>
+
+  <h2>Create a fee order</h2>
+  <form id="fee-form">
+    <div class="row">
+      <div>
+        <label for="payerName">Payer name</label>
+        <input id="payerName" value="Test Student" />
+      </div>
+      <div>
+        <label for="label">Fee label</label>
+        <input id="label" value="Term 1 tuition fee" />
+      </div>
+      <div>
+        <label for="amount">Amount (USD, sandbox)</label>
+        <input id="amount" value="500.00" />
+      </div>
+    </div>
+    <button type="submit">Create payment order</button>
+  </form>
+  <pre id="out">Nothing yet.</pre>
+
+  <h2>Fees</h2>
+  <div id="fees"><p class="empty">No fees yet — create one above.</p></div>
+
+  <h2>PayPal events received</h2>
+  <div id="events"><p class="empty">No webhook events yet.</p></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let mode = 'live';
+
+    async function loadMode() {
+      const health = await (await fetch('/health')).json();
+      mode = health.mode;
+      const banner = $('mode-banner');
+      if (mode === 'mock') {
+        banner.className = 'banner mock';
+        banner.textContent = 'MOCK MODE — no real PayPal, no real money. The buttons below simulate the payer and PayPal so the whole loop can be tested.';
+      } else {
+        banner.className = 'banner live';
+        banner.textContent = 'LIVE MODE — talking to the PayPal Sandbox. Payer approval happens through the PayPal approve link.';
+      }
+    }
+
+    function badge(status) {
+      return `<span class="badge st-${status}">${status.replaceAll('_', ' ')}</span>`;
+    }
+
+    function esc(s) {
+      return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    async function loadFees() {
+      const data = await (await fetch('/fees')).json();
+      const box = $('fees');
+      if (!data.fees.length) {
+        box.innerHTML = '<p class="empty">No fees yet — create one above.</p>';
+      } else {
+        box.innerHTML = '<table><tr><th>Fee</th><th>Payer</th><th>Amount</th><th>Status</th><th>Actions</th></tr>' +
+          data.fees.map((f) => {
+            const actions = [];
+            if (mode === 'mock' && f.status === 'AWAITING_APPROVAL') {
+              actions.push(`<button data-act="approve" data-order="${esc(f.orderId)}">Simulate payer approval</button>`);
+            }
+            if (f.status === 'APPROVED' || (mode === 'mock' && f.status === 'AWAITING_APPROVAL')) {
+              actions.push(
+                `<select id="outcome-${esc(f.feeId)}">` +
+                `<option value="completed">Payment succeeds</option>` +
+                `<option value="pending">Payment pending</option>` +
+                `<option value="denied">Payment denied</option>` +
+                `<option value="refunded">Paid, then refunded</option>` +
+                `</select> ` +
+                `<button data-act="capture" data-order="${esc(f.orderId)}" data-fee="${esc(f.feeId)}">Capture</button>`
+              );
+            }
+            if (mode === 'mock' && f.status === 'SETTLED') {
+              actions.push(`<button data-act="refund" data-order="${esc(f.orderId)}">Simulate refund</button>`);
+            }
+            if (f.events.length) {
+              actions.push(`<button data-act="explain" data-fee="${esc(f.feeId)}">Explain</button>`);
+            }
+            const expl = f.explanation
+              ? `<div class="explain"><h3>${esc(f.explanation.headline)}</h3><p>${esc(f.explanation.explanation)}</p><p><strong>Next step:</strong> ${esc(f.explanation.next_step)}</p><p class="src">Source: ${esc(f.explanation.source)} — ${esc(f.explanation.confidence_note || '')}</p></div>`
+              : '';
+            return `<tr><td><strong>${esc(f.feeId)}</strong><br>${esc(f.label)}<br><span class="note">order ${esc(f.orderId || '—')}</span>${f.approveUrl ? `<br><a href="${esc(f.approveUrl)}" target="_blank" rel="noopener">PayPal approve link</a>` : ''}</td>` +
+              `<td>${esc(f.payerName)}</td><td>${esc(f.currency)} ${esc(f.amount)}</td>` +
+              `<td>${badge(f.status)}<br><span class="note">${f.events.map((e) => esc(e.type)).join('<br>') || ''}</span></td>` +
+              `<td>${actions.join(' ')}${expl}</td></tr>`;
+          }).join('') + '</table>';
+      }
+      const ev = await (await fetch('/webhook-events')).json();
+      $('events').innerHTML = ev.events.length
+        ? '<table><tr><th>When</th><th>Event</th><th>Status</th><th>Verified</th></tr>' +
+          ev.events.map((e) => `<tr><td>${esc(e.receivedAt)}</td><td>${esc(e.eventType)}</td><td>${esc(e.resourceStatus || '—')}</td><td>${e.verified ? '✅ yes' : (e.verificationSkipped ? '⚠️ skipped (no credentials)' : '❌ NO — ignored')}</td></tr>`).join('') + '</table>'
+        : '<p class="empty">No webhook events yet.</p>';
+    }
+
+    document.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      const act = btn.dataset.act;
+      btn.disabled = true;
+      try {
+        if (act === 'approve') {
+          await fetch('/mock/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: btn.dataset.order }) });
+        } else if (act === 'capture') {
+          const outcome = document.getElementById(`outcome-${btn.dataset.fee}`)?.value || 'completed';
+          const res = await fetch('/capture-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: btn.dataset.order, mockOutcome: outcome }) });
+          $('out').textContent = JSON.stringify(await res.json(), null, 2);
+        } else if (act === 'refund') {
+          await fetch('/mock/refund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ orderId: btn.dataset.order }) });
+        } else if (act === 'explain') {
+          const res = await fetch(`/fees/${btn.dataset.fee}/explain`, { method: 'POST' });
+          $('out').textContent = JSON.stringify(await res.json(), null, 2);
+        }
+      } finally {
+        await loadFees();
+      }
+    });
+
+    $('fee-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const out = $('out');
+      out.textContent = 'Creating order…';
+      try {
+        const res = await fetch('/create-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            payerName: $('payerName').value,
+            label: $('label').value,
+            amount: $('amount').value,
+            currency: 'USD',
+          }),
+        });
+        const data = await res.json();
+        out.textContent = JSON.stringify(data, null, 2);
+        await loadFees();
+      } catch (err) {
+        out.textContent = 'Request failed: ' + err.message;
+      }
+    });
+
+    loadMode().then(loadFees);
+  </script>
+</body>
+</html>
