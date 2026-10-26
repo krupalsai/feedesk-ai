@@ -147,8 +147,9 @@ pass.
   register `<public-url>/webhook` in the PayPal app) → `PAYPAL_WEBHOOK_ID`.
   Until then, live webhooks cannot arrive; capture-response polling
   (`GET /v2/checkout/orders/{id}`) is the fallback proof of status.
-- **Public GitHub repo** + **demo video (< 3 min)** + **Devpost submission**
-  (deadline Nov 13, 2026, 01:30 IST).
+- **Demo video (< 3 min)** + **Devpost submission**
+  (deadline Nov 13, 2026, 01:30 IST). Repo is public at
+  https://github.com/krupalsai/feedesk-ai.
 - **PayPal JS SDK smart buttons** on the desk page (Slice 2) — the desk
   currently calls `/create-order` + `/capture-order` directly; the payer
   flow in live mode uses the approve link. SDK buttons are a polish item,
